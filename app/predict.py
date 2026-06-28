@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from pathlib import Path
 import joblib
 import pandas as pd
 
 app = FastAPI()
 
-artifact = joblib.load("app/model.pkl")
+MODEL_PATH = Path(__file__).resolve().parent / "model.pkl"
+artifact = joblib.load(MODEL_PATH)
 model = artifact["model"]
 threshold = artifact["threshold"]
 
