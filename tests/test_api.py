@@ -43,3 +43,9 @@ def test_predict():
     response = client.post("/predict", json=payload)
 
     assert response.status_code == 200
+    body = response.json()
+    assert "churn_prediction" in body
+    assert "churn_probability" in body
+    assert "threshold" in body
+    assert body["churn_prediction"] in (0, 1)
+    assert 0.0 <= body["churn_probability"] <= 1.0

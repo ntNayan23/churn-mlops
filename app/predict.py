@@ -5,8 +5,9 @@ import pandas as pd
 
 app = FastAPI()
 
-# Load model
-model = joblib.load("app/model.pkl")
+artifact = joblib.load("app/model.pkl")
+model = artifact["model"]
+threshold = artifact["threshold"]
 
 
 class CustomerData(BaseModel):
@@ -38,10 +39,12 @@ def home():
 
 @app.post("/predict")
 def predict(data: CustomerData):
-    # Use Pydantic V2 API `model_dump()` instead of deprecated `dict()`
     input_data = pd.DataFrame([data.model_dump()])
-    prediction = model.predict(input_data)
+    churn_probability = model.predict_proba(input_data)[0][1]
+    churn_prediction = int(churn_probability >= threshold)
 
     return {
-        "churn_prediction": int(prediction[0])
+        "churn_prediction": churn_prediction,
+        "churn_probability": round(float(churn_probability), 4),
+        "threshold": threshold,
     }
