@@ -1,6 +1,54 @@
 # Churn MLOps
 
-An end-to-end MLOps pipeline for predicting customer churn. Trains a Random Forest classifier with MLflow experiment tracking and serves predictions via a FastAPI REST API, containerised with Docker, tested through GitHub Actions CI, and deployed on Render.
+An end-to-end MLOps pipeline for predicting customer churn — from training to a monitored, deployed REST API.
+
+**Live API:** `https://<your-render-service>.onrender.com`
+
+## Tech Stack
+
+| Layer | Tool |
+|---|---|
+| Model | scikit-learn RandomForestClassifier |
+| Experiment Tracking | MLflow |
+| API | FastAPI + Uvicorn |
+| Containerisation | Docker |
+| CI/CD | GitHub Actions |
+| Deployment | Render |
+| Monitoring | Python logging + CSV audit trail |
+
+## Architecture
+
+```
+data/Churn.csv
+      │
+      ▼
+app/train.py  ──►  MLflow (metrics + params)
+      │
+      ▼
+app/model.pkl
+      │
+      ▼
+app/predict.py (FastAPI)
+      │
+      ├──► logs/predictions.csv  (audit trail)
+      └──► stdout (structured logging)
+```
+
+**CI/CD flow:**
+
+```
+git push main
+      │
+      ▼
+GitHub Actions (ci.yml)        GitHub Actions (deploy.yml)
+  install deps                   needs: test job to pass
+  train model          ──────►   curl Render deploy hook
+  pytest                               │
+                                       ▼
+                                 Render builds Docker image
+                                 (trains model at build time)
+                                 deploys new container
+```
 
 ## Project Structure
 
@@ -8,15 +56,18 @@ An end-to-end MLOps pipeline for predicting customer churn. Trains a Random Fore
 churn-mlops/
 ├── app/
 │   ├── train.py        # Model training + MLflow tracking
-│   ├── predict.py      # FastAPI prediction API
+│   ├── predict.py      # FastAPI prediction API + logging
 │   └── preprocess.py   # Data preprocessing utilities
 ├── data/
 │   └── Churn.csv       # Training dataset
+├── logs/
+│   └── predictions.csv # Prediction audit trail (auto-created)
 ├── tests/
 │   └── test_api.py     # API endpoint tests
 ├── .github/
 │   └── workflows/
-│       └── ci.yml      # GitHub Actions CI pipeline
+│       ├── ci.yml      # Run tests on push + PR
+│       └── deploy.yml  # Test then deploy to Render on push to main
 ├── Dockerfile
 └── requirements.txt
 ```
@@ -36,19 +87,10 @@ pip install -r requirements.txt
 
 ## Training
 
-Trains a `RandomForestClassifier` on `data/Churn.csv` with `class_weight="balanced"` to handle the class imbalance (~73% no-churn). Logs parameters, metrics, and the model artifact to MLflow. The trained model is saved to `app/model.pkl`.
+Trains a `RandomForestClassifier` on `data/Churn.csv` with `class_weight="balanced"` to handle the imbalanced dataset (~73% no-churn). Logs parameters, metrics, and the model to MLflow. Saves the model and decision threshold to `app/model.pkl`.
 
 ```bash
 python app/train.py
-```
-
-**Metrics logged to MLflow:** accuracy, precision, recall, F1, ROC-AUC, and the decision threshold.
-
-To view experiment results:
-
-```bash
-mlflow ui
-# Open http://localhost:5000
 ```
 
 **Model performance** (threshold = 0.35):
@@ -60,62 +102,60 @@ mlflow ui
 | F1 Score | 0.62 |
 | ROC-AUC | 0.83 |
 
-A threshold of 0.35 is used instead of the default 0.5 to maximise recall — catching churners that would otherwise be missed matters more than avoiding false alarms.
+A threshold of 0.35 is used instead of the default 0.5 — catching churners matters more than minimising false alarms in a retention use case.
+
+To view MLflow experiment results:
+
+```bash
+mlflow ui
+# Open http://localhost:5000
+```
 
 ## Running the API
 
-**Locally:**
+**Locally** (train first to generate `app/model.pkl`):
 
 ```bash
-python app/train.py   # generates app/model.pkl first
-
+python app/train.py
 uvicorn app.predict:app --host 0.0.0.0 --port 10000 --reload
 ```
 
-**With Docker** (training runs automatically during build):
+**With Docker** (model is trained automatically during image build):
 
 ```bash
 docker build -t churn-api .
 docker run -p 10000:10000 churn-api
 ```
 
-API is available at `http://localhost:10000`.
+API available at `http://localhost:10000`.
 
 ## API Endpoints
 
 ### `GET /`
+
 Health check.
 
+**Response:**
 ```json
 {"message": "Customer Churn Prediction API is running"}
 ```
 
 ### `POST /predict`
+
 Predicts whether a customer will churn.
 
-**Request body:**
-```json
-{
-  "gender": 1,
-  "SeniorCitizen": 0,
-  "Partner": 1,
-  "Dependents": 0,
-  "tenure": 12,
-  "PhoneService": 1,
-  "MultipleLines": 0,
-  "InternetService": 1,
-  "OnlineSecurity": 0,
-  "OnlineBackup": 1,
-  "DeviceProtection": 0,
-  "TechSupport": 1,
-  "StreamingTV": 1,
-  "StreamingMovies": 0,
-  "Contract": 2,
-  "PaperlessBilling": 1,
-  "PaymentMethod": 1,
-  "MonthlyCharges": 70.5,
-  "TotalCharges": 850.2
-}
+**Sample request:**
+```bash
+curl -X POST http://localhost:10000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "gender": 1, "SeniorCitizen": 0, "Partner": 1, "Dependents": 0,
+    "tenure": 12, "PhoneService": 1, "MultipleLines": 0, "InternetService": 1,
+    "OnlineSecurity": 0, "OnlineBackup": 1, "DeviceProtection": 0,
+    "TechSupport": 1, "StreamingTV": 1, "StreamingMovies": 0,
+    "Contract": 2, "PaperlessBilling": 1, "PaymentMethod": 1,
+    "MonthlyCharges": 70.5, "TotalCharges": 850.2
+  }'
 ```
 
 **Response:**
@@ -128,8 +168,10 @@ Predicts whether a customer will churn.
 ```
 
 - `churn_prediction`: `0` = no churn, `1` = churn
-- `churn_probability`: raw model probability (0–1)
-- `threshold`: the cutoff used to make the binary decision
+- `churn_probability`: raw model score (0–1)
+- `threshold`: cutoff used for the binary decision
+
+Every request is logged to stdout and appended to `logs/predictions.csv` with a UTC timestamp for audit and monitoring.
 
 ## Tests
 
@@ -137,21 +179,33 @@ Predicts whether a customer will churn.
 pytest tests/
 ```
 
-Tests cover the `/` and `/predict` endpoints using FastAPI's `TestClient`. Run `python app/train.py` first to generate the model file.
+Tests cover the `/` and `/predict` endpoints using FastAPI's `TestClient`. Run `python app/train.py` first to generate the model file locally.
 
-## CI Pipeline
+## CI/CD
 
-GitHub Actions runs on every push and pull request to `main`:
+Two GitHub Actions workflows:
 
-1. Checks out code
-2. Sets up Python 3.12
-3. Caches pip dependencies
-4. Installs dependencies from `requirements.txt`
-5. Trains the model (`app/train.py`)
-6. Runs the test suite (`pytest tests/`)
+**`ci.yml`** — runs on every push and pull request to `main`:
+- Install dependencies → train model → run tests
 
-See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+**`deploy.yml`** — runs on push to `main`, after tests pass:
+- Same test steps, then triggers a Render deploy via webhook
 
-## Deployment
+To enable deployment, add your Render deploy hook URL as a repository secret named `RENDER_DEPLOY_HOOK_URL`:
+> GitHub repo → Settings → Secrets and variables → Actions → New repository secret
 
-Deployed on **Render** via Docker. The model is trained during the Docker image build (`RUN python app/train.py` in the Dockerfile), so no pre-built model file needs to be committed to the repository. The service runs on port `10000`.
+## Monitoring
+
+Every prediction logs two things:
+
+**Stdout (structured logs):**
+```
+2026-06-29 04:00:00 INFO Incoming prediction request: {'gender': 1, ...}
+2026-06-29 04:00:00 INFO Prediction result: churn=1, probability=0.6183, threshold=0.35
+```
+
+**`logs/predictions.csv` (audit trail):**
+```
+timestamp,gender,SeniorCitizen,...,churn_probability,churn_prediction
+2026-06-29T04:00:00.123456,1,0,...,0.6183,1
+```

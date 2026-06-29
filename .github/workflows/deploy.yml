@@ -1,0 +1,43 @@
+name: Deploy to Render
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Training
+        run: python app/train.py
+
+      - name: Run Tests
+        run: pytest tests/
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Render Deploy
+        run: curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
