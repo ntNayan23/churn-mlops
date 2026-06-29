@@ -40,4 +40,12 @@ jobs:
 
     steps:
       - name: Trigger Render Deploy
-        run: curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "::error::RENDER_DEPLOY_HOOK_URL secret is not set."
+            echo "Go to: GitHub repo → Settings → Secrets and variables → Actions → New secret"
+            exit 1
+          fi
+          curl -fsSL -X POST "$RENDER_DEPLOY_HOOK_URL"
